@@ -12,6 +12,7 @@ import akka.http.javadsl.model.*;
 import akka.http.javadsl.model.sse.ServerSentEvent;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
@@ -21,6 +22,8 @@ import java.util.logging.Logger;
 import java.util.function.Function;
 
 import akka.util.ByteString;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import scala.concurrent.duration.FiniteDuration;
 
 public class EventProcessor {
@@ -55,7 +58,7 @@ public class EventProcessor {
     FiniteDuration per = FiniteDuration.create(10, TimeUnit.SECONDS);
     int maximumBurst = 100;
 
-    Source<String, NotUsed> jsonObjects = eventSource
+    Source<String, NotUsed> jsonStrings = eventSource
         // we only want to consume `nrOfSamples` samples:
         .take(nrOfSamples)
         .map(ServerSentEvent::getData);
@@ -68,28 +71,48 @@ public class EventProcessor {
 //        .via(JsonFraming.objectScanner(Integer.MAX_VALUE))
 //        .map(ByteString::utf8String)
 
-    CompletionStage<List<String>> collectedJsons = jsonObjects
-        // we throttle the processing a bit, so it's nicer to look at the console printout:
-        .throttle(elements, per, maximumBurst, ThrottleMode.shaping())
-        // log elements:
-        .log("objects").withAttributes(streamLoggingAttributes)
-        // we run the stream; this is where it starts the requests and processing of the data;
-        // we can get all elements into a sequence (a List), since we know it's of finite size (due to the take())
-        .runWith(Sink.seq(), materializer);
+    Gson gson = new Gson();
+    @SuppressWarnings("unchecked")
+    Source<Map<String, String>, NotUsed> maps = jsonStrings.map(s -> gson.fromJson(s, Map.class));
 
-    try {
-      // since the stream above is running asynchronously, if we want to get a strict value out of it
-      // we either block (as we do in the example below, using get() with a timeout), or we would use map()
-      // and other operators on CompletableFuture
-      collectedJsons
-          .toCompletableFuture()
-          .get(10, TimeUnit.SECONDS);
-    } finally {
-      // finally, we terminate the system, causing the app to exit
-      // we do so in a finally block, because if the stream failed, its failure would be passed through
-      // into the CompletionStage it materialized, which would make the above get() call throw as well.
-      system.terminate();
-    }
+    maps
+        // since each reply may contain more replies ({"1F3B0":1,"1F449":1,"1F4A5":1,"1F51E":1,"267B":1}),
+        // we flatten it:
+        .mapConcat(Map::entrySet)
+        // next we group them by emoji key:
+        .groupBy(nrOfSamples, Map.Entry::getKey)
+        // and each of those substreams we pipe to their own Sink:
+        .to(Sink.fold(0, (emojiCounter, entry) -> {
+          int emojiSeenTimes = emojiCounter + 1;
+          System.out.println("Observed emoji: " + entry.getKey() + " [" + emojiSeenTimes + "] times");
+          return emojiSeenTimes;
+        }))
+    .run(materializer);
+
+
+
+//    CompletionStage<List<String>> collectedJsons = jsonStrings
+//        // we throttle the processing a bit, so it's nicer to look at the console printout:
+//        .throttle(elements, per, maximumBurst, ThrottleMode.shaping())
+//        // log elements:
+//        .log("objects").withAttributes(streamLoggingAttributes)
+//        // we run the stream; this is where it starts the requests and processing of the data;
+//        // we can get all elements into a sequence (a List), since we know it's of finite size (due to the take())
+//        .runWith(Sink.seq(), materializer);
+//
+//    try {
+//      // since the stream above is running asynchronously, if we want to get a strict value out of it
+//      // we either block (as we do in the example below, using get() with a timeout), or we would use map()
+//      // and other operators on CompletableFuture
+//      collectedJsons
+//          .toCompletableFuture()
+//          .get(10, TimeUnit.SECONDS);
+//    } finally {
+//      // finally, we terminate the system, causing the app to exit
+//      // we do so in a finally block, because if the stream failed, its failure would be passed through
+//      // into the CompletionStage it materialized, which would make the above get() call throw as well.
+//      system.terminate();
+//    }
 
   }
 
