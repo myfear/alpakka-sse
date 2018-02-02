@@ -33,7 +33,7 @@ public class EventProcessor {
 
     private static final String host = "emojitrack-gostreamer.herokuapp.com/subscribe/eps";
     private static final int port = 80;
-    private static final int nrOfSamples = 10;
+    private static final int nrOfSamples = 100;
     private static final Uri targetUri = Uri.create(String.format("http://%s:%d", host, port));
 
     // Logger and configuration
@@ -50,6 +50,7 @@ public class EventProcessor {
         LOGGER.info("Init");
 
         final Optional<String> lastEventId = Optional.of("10");
+        
         Source<ServerSentEvent, NotUsed> eventSource
                 = EventSource.create(targetUri, send, lastEventId, materializer);
 
@@ -61,7 +62,7 @@ public class EventProcessor {
         int maximumBurst = 100;
 
         eventSource.map(sse -> {
-            System.out.println(sse.getData());
+            LOGGER.info(sse.getData());
             return sse;
                 })
                 .throttle(elements, per, maximumBurst, ThrottleMode.shaping())
